@@ -104,6 +104,12 @@ include some arbitrary initial value like NIL."
   (dolist (function functions)
     (apply function arguments)))
 
+(defun run-hook-until-success (functions &rest arguments)
+  "Call each of FUNCTIONS with ARGUMENTS, stop if any function returns
+a truthy value"
+  (loop for hook in functions
+          thereis (apply hook arguments)))
+
 (defvar *new-connection-hook* '()
   "This hook is run each time a connection is established.
 The connection structure is given as the argument.
@@ -583,7 +589,7 @@ recently established one."
              (when (and thread 
                         (thread-alive-p thread)
                         (not (eq thread (current-thread))))
-               (kill-thread thread))))
+               (ignore-errors (kill-thread thread)))))
           (t
            (warn "No server for ~s: ~s" key value)))))
 
@@ -957,16 +963,6 @@ The processing is done in the extent of the toplevel restart."
     (with-panic-handler (connection)
       (loop (dispatch-event connection (receive))))))
 
-(defvar *auto-flush-interval* 0.2)
-
-(defun auto-flush-loop (stream)
-  (loop
-   (when (not (and (open-stream-p stream)
-                   (output-stream-p stream)))
-     (return nil))
-   (force-output stream)
-   (sleep *auto-flush-interval*)))
-
 (defgeneric thread-for-evaluation (connection id)
   (:documentation "Find or create a thread to evaluate the next request.")
   (:method ((connection multithreaded-connection) (id (eql t)))
@@ -1017,44 +1013,47 @@ The processing is done in the extent of the toplevel restart."
            (delete thread (mconn.active-threads connection) :count 1)))
     (singlethreaded-connection)))
 
+(defparameter *event-hook* nil)
+
 (defun dispatch-event (connection event)
   "Handle an event triggered either by Emacs or within Lisp."
   (log-event "dispatch-event: ~s~%" event)
-  (dcase event
-    ((:emacs-rex form package thread-id id)
-     (let ((thread (thread-for-evaluation connection thread-id)))
-       (cond (thread
-              (add-active-thread connection thread)
-              (send-event thread `(:emacs-rex ,form ,package ,id)))
-             (t
-              (encode-message 
-               (list :invalid-rpc id
-                     (format nil "Thread not found: ~s" thread-id))
-               (current-socket-io))))))
-    ((:return thread &rest args)
-     (remove-active-thread connection thread)
-     (encode-message `(:return ,@args) (current-socket-io)))
-    ((:emacs-interrupt thread-id)
-     (interrupt-worker-thread connection thread-id))
-    (((:write-string 
-       :debug :debug-condition :debug-activate :debug-return :channel-send
-       :presentation-start :presentation-end
-       :new-package :new-features :ed :indentation-update
-       :eval :eval-no-wait :background-message :inspect :ping
-       :y-or-n-p :read-from-minibuffer :read-string :read-aborted :test-delay
-       :write-image)
-      &rest _)
-     (declare (ignore _))
-     (encode-message event (current-socket-io)))
-    (((:emacs-pong :emacs-return :emacs-return-string) thread-id &rest args)
-     (send-event (find-thread thread-id) (cons (car event) args)))
-    ((:emacs-channel-send channel-id msg)
-     (let ((ch (find-channel channel-id)))
-       (send-event (channel-thread ch) `(:emacs-channel-send ,ch ,msg))))
-    ((:reader-error packet condition)
-     (encode-message `(:reader-error ,packet 
-                                     ,(safe-condition-message condition))
-                     (current-socket-io)))))
+  (or (run-hook-until-success *event-hook* connection event)
+      (dcase event
+        ((:emacs-rex form package thread-id id)
+         (let ((thread (thread-for-evaluation connection thread-id)))
+           (cond (thread
+                  (add-active-thread connection thread)
+                  (send-event thread `(:emacs-rex ,form ,package ,id)))
+                 (t
+                  (encode-message 
+                   (list :invalid-rpc id
+                         (format nil "Thread not found: ~s" thread-id))
+                   (current-socket-io))))))
+        ((:return thread &rest args)
+         (remove-active-thread connection thread)
+         (encode-message `(:return ,@args) (current-socket-io)))
+        ((:emacs-interrupt thread-id)
+         (interrupt-worker-thread connection thread-id))
+        (((:write-string 
+           :debug :debug-condition :debug-activate :debug-return :channel-send
+           :presentation-start :presentation-end
+           :new-package :new-features :ed :indentation-update
+           :eval :eval-no-wait :background-message :inspect :ping
+           :y-or-n-p :read-from-minibuffer :read-string :read-aborted :test-delay
+           :write-image)
+          &rest _)
+         (declare (ignore _))
+         (encode-message event (current-socket-io)))
+        (((:emacs-pong :emacs-return :emacs-return-string) thread-id &rest args)
+         (send-event (find-thread thread-id) (cons (car event) args)))
+        ((:emacs-channel-send channel-id msg)
+         (let ((ch (find-channel channel-id)))
+           (send-event (channel-thread ch) `(:emacs-channel-send ,ch ,msg))))
+        ((:reader-error packet condition)
+         (encode-message `(:reader-error ,packet 
+                                         ,(safe-condition-message condition))
+                         (current-socket-io))))))
 
 
 (defun send-event (thread event)
@@ -1187,7 +1186,7 @@ event was found."
       (when (and thread
                  (thread-alive-p thread)
                  (not (equal (current-thread) thread)))
-        (kill-thread thread)))))
+        (ignore-errors (kill-thread thread))))))
 
 ;;;;;; Signal driven IO
 
@@ -1377,13 +1376,13 @@ entered nothing, returns NIL when user pressed C-g."
                                            ,prompt ,initial-value))
     (third (wait-for-event `(:emacs-return ,tag result)))))
 
-(defstruct (unredable-result
-            (:constructor make-unredable-result (string))
+(defstruct (unreadable-result
+            (:constructor make-unreadable-result (string))
             (:copier nil)
             (:print-object
              (lambda (object stream)
                (print-unreadable-object (object stream :type t)
-                 (princ (unredable-result-string object) stream)))))
+                 (princ (unreadable-result-string object) stream)))))
   string)
 
 (defun process-form-for-emacs (form)
@@ -1420,7 +1419,7 @@ converted to lower case."
 				  ,(process-form-for-emacs form)))
 	   (let ((value (caddr (wait-for-event `(:emacs-return ,tag result)))))
 	     (dcase value
-               ((:unreadable value) (make-unredable-result value))
+               ((:unreadable value) (make-unreadable-result value))
 	       ((:ok value) value)
                ((:error kind . data) (error "~a: ~{~a~}" kind data))
 	       ((:abort) (abort))))))))
@@ -2973,7 +2972,16 @@ If non-nil, called with two arguments SPEC and TRACED-P." )
     (do-find (string-left-trim *find-definitions-left-trim* name))
     (do-find (string-left-trim *find-definitions-left-trim*
                                (string-right-trim
-                                *find-definitions-right-trim* name)))))
+                                *find-definitions-right-trim* name)))
+    ;; Not exactly robust
+    (when (and (eql (search "(setf " name :test #'char-equal) 0)
+               (char= (char name (1- (length name))) #\)))
+      (multiple-value-bind (symbol found)
+          (with-buffer-syntax ()
+            (parse-symbol (subseq name (length "(setf ")
+                                  (1- (length name)))))
+        (when found
+          (values `(setf ,symbol) t))))))
 
 (defslimefun find-definitions-for-emacs (name)
   "Return a list ((DSPEC LOCATION) ...) of definitions for NAME.
@@ -3383,7 +3391,7 @@ Return NIL if LIST is circular."
    (let ((content (hash-table-to-alist ht)))
      (cond ((every (lambda (x) (typep (first x) '(or string symbol))) content)
             (setf content (sort content 'string< :key #'first)))
-           ((every (lambda (x) (typep (first x) 'number)) content)
+           ((every (lambda (x) (typep (first x) 'real)) content)
             (setf content (sort content '< :key #'first))))
      (loop for (key . value) in content appending
            `((:value ,key) " = " (:value ,value)
@@ -3702,6 +3710,18 @@ Collisions are caused because package information is ignored."
 ;;; FIXME: it's too slow on CLASP right now, remove once it's fast enough.
 #-clasp
 (add-hook *pre-reply-hook* 'sync-indentation-to-emacs)
+
+(defun make-output-function-for-target (connection target)
+  "Create a function to send user output to a specific TARGET in Emacs."
+  (lambda (string)
+    (swank::with-connection (connection)
+      (with-simple-restart
+          (abort "Abort sending output to Emacs.")
+        (swank::send-to-emacs `(:write-string ,string ,target))))))
+
+(defun make-output-stream-for-target (connection target)
+  "Create a stream that sends output to a specific TARGET in Emacs."
+  (make-output-stream (make-output-function-for-target connection target)))
 
 
 ;;;; Testing 

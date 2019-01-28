@@ -12,8 +12,7 @@
 @end direntry
 @c %**end of header
 
-@set EDITION 2.20
-@set SLIMEVER 2.20
+@set EDITION 2.23
 @set UPDATED @today{}
 @set TITLE SLIME User Manual
 @settitle @value{TITLE}, version @value{EDITION}
@@ -104,7 +103,7 @@ This file has been placed in the public domain.
 @top SLIME
 
 @SLIME{} is the ``Superior Lisp Interaction Mode for Emacs''. This is
-the manual for version @value{SLIMEVER}. (Last updated @value{UPDATED})
+the manual for version @value{EDITION}. (Last updated @value{UPDATED})
 
 @insertcopying
 @end ifnottex
@@ -838,10 +837,6 @@ Edit the value of a setf-able form in a new buffer @file{*Edit <form>*}.
 The value is inserted into a temporary buffer for editing and then set
 in Lisp when committed with @kbd{C-c C-c}.
 
-@kbditem{C-x M-e, slime-eval-last-expression-display-output}
-Display the output buffer and evaluate the expression preceding point.
-This is useful if the expression writes something to the output stream.
-
 @kbditem{C-c C-u, slime-undefine-function}
 Undefine the function, with @code{fmakunbound}, for the symbol at
 point.
@@ -1104,7 +1099,7 @@ Show definition at point in the other window and close Xref buffer.
 @kbditem{C-c C-c, slime-recompile-xref}
 Recompile definition at point.
 
-@kbditem{C-c C-c, slime-recompile-all-xrefs}
+@kbditem{C-c C-k, slime-recompile-all-xrefs}
 Recompile all definitions.
 
 @end table
@@ -1251,8 +1246,7 @@ Fetch all inspector contents and go to the end.
 Store the value under point in the variable `*'.  This can
 then be used to access the object in the REPL.
 
-@kbditempair{TAB, S-TAB, slime-inspector-next-inspectable-object,
-slime-inspector-previous-inspectable-object}
+@kbditempair{TAB, S-TAB, slime-inspector-next-inspectable-object, slime-inspector-previous-inspectable-object}
 
 Jump to the next and previous inspectable object respectively.
 
@@ -1850,9 +1844,14 @@ is enabled by default.
 
 @vindex SWANK:*GLOBALLY-REDIRECT-IO*
 @item SWANK:*GLOBALLY-REDIRECT-IO*
-When true this causes the standard streams (@code{*standard-output*},
-etc) to be globally redirected to the @REPL{} in Emacs. When
-@code{NIL} (the default) these streams are only temporarily redirected
+When T this causes the standard streams (@code{*standard-output*},
+etc) to be globally redirected to the @REPL{} in Emacs.
+
+When @code{:STARTED-FROM-EMACS} (default) redirects the output when
+the lisp is launched from emacs (i.e. @kbd{M-x slime}), but not
+from @kbd{M-x slime-connect}.
+
+When @code{NIL} these streams are only temporarily redirected
 to Emacs using dynamic bindings while handling requests. Note that
 @code{*standard-input*} is currently never globally redirected into
 Emacs, because it can interact badly with the Lisp's native @REPL{} by
@@ -2087,11 +2086,12 @@ contrib to setup the proper translations by simply doing:
 @node Global IO Redirection
 @section Globally redirecting all IO to the REPL
 
-By default @SLIME{} does not change @code{*standard-output*} and
-friends outside of the @REPL{}. If you have any other threads which
-call @code{format}, @code{write-string}, etc. that output will be seen
-only in the @code{*inferior-lisp*} buffer or on the terminal, more
-often than not this is inconvenient. So, if you want code such as this:
+When connecting via @kbd{M-x slime-connect} @SLIME{} does
+not change @code{*standard-output*} and friends outside of the
+@REPL{}. If you have any other threads which call @code{format},
+@code{write-string}, etc. that output will be seen only in
+the @code{*inferior-lisp*} buffer or on the terminal, more often than
+not this is inconvenient. So, if you want code such as this:
 
 @example
 (run-in-new-thread
@@ -2100,13 +2100,11 @@ often than not this is inconvenient. So, if you want code such as this:
 @end example
 
 to send its output to @SLIME{}'s repl buffer, as opposed to
-@code{*inferior-lisp*}, set @code{swank:*globally-redirect-io*} to T.
+@code{*inferior-lisp*}, set @code{swank:*globally-redirect-io*} to T
+in @file{~/.swank.lisp}
 
-Note that the value of this variable is only checked when swank
-accepts the connection so you should set it via
-@file{~/.swank.lisp}. Otherwise you will need to call
-@code{swank::globally-redirect-io-to-connection} yourself, but you
-shouldn't do that unless you know what you're doing.
+But when started using @kbd{M-x slime} the streams are redirected by
+default.
 
 @c -----------------------
 @node Auto-SLIME
@@ -2202,7 +2200,7 @@ If you like what you see try this:
 
 We recommend that you setup contribs @emph{before} starting @SLIME{} via
 @kbd{M-x slime}, but if you want to enable more contribs @emph{after}
-you that, you can set the @code{slime-contribs} variable to another
+you do that, you can set the @code{slime-contribs} variable to another
 value and call @code{M-x slime-setup}. Note this though:
 
 @itemize @bullet
@@ -2324,8 +2322,7 @@ Bash.
 
 @table @kbd
 
-@kbditempair{C-<up>, C-<down>,
-             slime-repl-forward-input, slime-repl-backward-input}
+@kbditempair{C-<up>, C-<down>, slime-repl-forward-input, slime-repl-backward-input}
 Go to the next/previous history item.
 
 @kbditempair{M-n, M-p, slime-repl-next-input, slime-repl-previous-input}
@@ -2334,16 +2331,14 @@ input as search pattern.  If @kbd{M-n}/@kbd{M-n} is typed two times in
 a row, the second invocation uses the same search pattern (even if the
 current input has changed).
 
-@kbditempair{M-s, M-r,
-slime-repl-next-matching-input, slime-repl-previous-matching-input}
+@kbditempair{M-s, M-r, slime-repl-next-matching-input, slime-repl-previous-matching-input}
 Search forward/reverse through command history with regex
 
 @c @code{slime-repl-@{next,previous@}-input}@*
 @c @code{slime-repl-@{next,previous@}-matching-input}@*
 @c @code{comint}-style input history commands.
 
-@kbditempair{C-c C-n, C-c C-p,
-slime-repl-next-prompt, slime-repl-previous-prompt}
+@kbditempair{C-c C-n, C-c C-p, slime-repl-next-prompt, slime-repl-previous-prompt}
 Move between the current and previous prompts in the @REPL{} buffer.
 Pressing RET on a line with old input copies that line to the newest
 prompt.
@@ -3395,7 +3390,6 @@ keybinding (if there is one) refer to the function description.
 @c @fcnindex{slime-eval-buffer}
 @fcnindex{slime-eval-defun}
 @fcnindex{slime-eval-last-expression}
-@fcnindex{slime-eval-last-expression-display-output}
 @c @fcnindex{slime-eval-print-last-expression}
 @fcnindex{slime-eval-region}
 @fcnindex{slime-fuzzy-abort}
